@@ -1,0 +1,119 @@
+---
+- name: Update apt package cache and run upgrade safe
+  become: true
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+    upgrade: safe
+- name: Install Base Packages
+  apt:
+    name: "{{ item }}"
+    state: present
+  with_items: "{{ packages }}"
+- name: "Ensure user '{{ user_name }}' is created"
+  user:
+    state: present
+    name: "{{ user_name }}"
+    uid: "{{ user_uid }}"
+    groups: "{{ user_groups }}"
+    shell: "{{ user_shell }}"
+    append: "{{ user_groups_append }}"
+    home: "{{ user_home }}"
+- name: "Ensure user '{{ user_name }}' ssh key Exists"
+  authorized_key:
+      user: "{{ user_name }}"
+      state: present
+      key: "{{ user_ssh_key }}"
+- name: "set timezone to {{ timezone }}"
+  timezone:
+    name: "{{ timezone }}"
+- name: Disallow root SSH access
+  lineinfile: dest=/etc/ssh/sshd_config
+    regexp="^PermitRootLogin"
+    line="PermitRootLogin no"
+    state=present
+  notify: Restart ssh
+- name: Clone oh-my-zsh repo for user
+  git:
+    repo: https://github.com/robbyrussell/oh-my-zsh.git
+    dest: "/home/{{ user_name }}/.oh-my-zsh"
+- name: "Setup user '{{ user_name }}' .zshrc"
+  get_url:
+    url: https://gist.githubusercontent.com/mikedevita/992a74c8e8276079f58e59d12db93dbc/raw/bdbf0308aa99e625093827b6ce17d8466ce9a20c/.zshrc
+    dest: "/home/{{ user_name }}/.zshrc"
+- name: "Setup user '{{ user_name }}' .vimrc"
+  get_url:
+    url: https://gist.githubusercontent.com/mikedevita/992a74c8e8276079f58e59d12db93dbc/raw/bdbf0308aa99e625093827b6ce17d8466ce9a20c/.vimrc
+    dest: "/home/{{ user_name }}/.vimrc"
+- name: swap - calculate difference between existing and configured size
+  set_fact:
+    common_swap_check_diff: "{{ (common_swap_size | float - ansible_swaptotal_mb) | abs | int }}"
+    common_swap_check_minimum_diff: "{{ (common_swap_size | float * 0.10) | round(1, 'ceil') | int }}"
+- name: swap - check if it is necessary to recreate it
+  set_fact:
+    common_swap_check_recreate: "{{ common_swap_check_diff > common_swap_check_minimum_diff }}"
+- name: swap - remove current swaps from fstab
+  lineinfile:
+    dest: /etc/fstab
+    regexp: '^/[\S]+\s+none\s+swap '
+    state: absent
+  when: common_swap_remove_current and
+        common_swap_check_recreate | bool
+  become: yes
+- name: swap - disable swap
+  command: swapoff --all
+  ignore_errors: yes
+  when: common_swap_check_recreate | bool
+  become: yes
+- name: swap - create path
+  file:
+    dest: "{{ common_swap_path }}"
+    owner: root
+    group: root
+    mode: 0600
+    state: directory
+  when: common_swap_check_recreate | bool
+  become: yes
+- name: swap - create swap file
+  command: dd if=/dev/zero of={{ common_swap_path }}/swap.block bs=1M count={{ common_swap_size }}
+  when: common_swap_check_recreate | bool
+  become: yes
+- name: swap - make swap
+  command: mkswap {{ common_swap_path }}/swap.block
+  when: common_swap_check_recreate | bool
+  become: yes
+- name: swap - add to fstab
+  mount:
+    name: swap
+    src: "{{ common_swap_path }}/swap.block"
+    fstype: swap
+    state: present
+  when: common_swap_check_recreate | bool and common_swap_fstab
+  become: yes
+- name: swap - swap on
+  command: swapon {{ common_swap_path }}/swap.block
+  when: common_swap_check_recreate | bool
+  become: yes
+- name: set vm.swappiness param in sysctl
+  sysctl:
+    name: vm.swappiness
+    state: present
+    value: 10
+    sysctl_set: yes
+- name: set vm.vfs_cache_pressure in sysctl
+  sysctl:
+    name: vm.vfs_cache_pressure
+    state: present
+    value: 50
+    sysctl_set: yes
+- name: Format digitalocean block volume
+  filesystem:
+    fstype: ext4
+    dev: "/dev/disk/by-id/scsi-0DO_Volume_volume-{{ hostvars.localhost.do.droplet.region.slug }}-{{ hostvars.localhost.do.droplet.name }}"
+- name: "Mount digitalocean block volume 'volume-{{ hostvars.localhost.do.droplet.region.slug }}-{{ hostvars.localhost.do.droplet.name }}' to /mnt/vol-01"
+  mount:
+      src: "/dev/disk/by-id/scsi-0DO_Volume_volume-{{ hostvars.localhost.do.droplet.region.slug }}-{{ hostvars.localhost.do.droplet.name }}"
+      path: /mnt/vol-01
+      state: mounted
+      fstype: ext4
+      opts: discard,defaults
