@@ -106,14 +106,3 @@
     state: present
     value: 50
     sysctl_set: yes
-- name: Format digitalocean block volume
-  filesystem:
-    fstype: ext4
-    dev: "/dev/disk/by-id/scsi-0DO_Volume_volume-{{ hostvars.localhost.do.droplet.region.slug }}-{{ hostvars.localhost.do.droplet.name }}"
-- name: "Mount digitalocean block volume 'volume-{{ hostvars.localhost.do.droplet.region.slug }}-{{ hostvars.localhost.do.droplet.name }}' to /mnt/vol-01"
-  mount:
-      src: "/dev/disk/by-id/scsi-0DO_Volume_volume-{{ hostvars.localhost.do.droplet.region.slug }}-{{ hostvars.localhost.do.droplet.name }}"
-      path: /mnt/vol-01
-      state: mounted
-      fstype: ext4
-      opts: discard,defaults
